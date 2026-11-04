@@ -18,3 +18,54 @@ create policy "anyone can vote"
 
 -- tally, for you (run in the sql editor):
 -- select choice, count(*) from public.stillplayful_votes group by choice order by count(*) desc;
+
+-- email notification (migration: stillplayful_vote_email_trigger).
+-- after each vote, posts the vote and running totals to the google apps script in notify/vote-email.gs,
+-- which emails yashantgyawali@gmail.com. the url and shared secret live in private.stillplayful_settings,
+-- a schema the public api can't reach. pg_net is async, so a failed email never blocks a vote.
+
+create extension if not exists pg_net with schema extensions;
+
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
+
+create table if not exists private.stillplayful_settings (
+  id int primary key default 1 check (id = 1),
+  notify_url text not null,
+  secret text not null
+);
+
+create or replace function private.notify_stillplayful_vote()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  s private.stillplayful_settings;
+  totals jsonb;
+begin
+  select * into s from private.stillplayful_settings where id = 1;
+  if s.notify_url is null then
+    return new;
+  end if;
+
+  select coalesce(jsonb_object_agg(choice, n), '{}'::jsonb) into totals
+  from (select choice, count(*) as n from public.stillplayful_votes group by choice) t;
+
+  perform net.http_post(
+    url := s.notify_url,
+    body := jsonb_build_object('secret', s.secret, 'email', new.email, 'choice', new.choice, 'totals', totals),
+    headers := '{"Content-Type": "application/json"}'::jsonb
+  );
+
+  return new;
+end;
+$$;
+
+revoke all on function private.notify_stillplayful_vote() from public, anon, authenticated;
+
+drop trigger if exists stillplayful_vote_email on public.stillplayful_votes;
+create trigger stillplayful_vote_email
+  after insert on public.stillplayful_votes
+  for each row execute function private.notify_stillplayful_vote();
