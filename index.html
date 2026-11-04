@@ -73,9 +73,62 @@
     .option {
       display: flex;
       gap: 0.9rem;
-      align-items: flex-start;
-      padding: 0.6rem 0;
+      align-items: center;
+      padding: 0.5rem 0;
       cursor: pointer;
+    }
+
+    .option img {
+      flex: none;
+      width: 4.5rem;
+      height: 4.5rem;
+      border-radius: 10px;
+      background: #f4f4f4;
+      outline: 2px solid transparent;
+      outline-offset: 2px;
+      transition: outline-color 0.15s;
+    }
+
+    .option:has(input:checked) img { outline-color: var(--ink); }
+
+    .option .photo {
+      flex: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      border-radius: 10px;
+      background: none;
+      cursor: zoom-in;
+    }
+
+    .option .photo:hover:not(:disabled) { background: none; }
+    .option .photo img { display: block; }
+
+    .viewer {
+      width: 100vw;
+      height: 100dvh;
+      max-width: none;
+      max-height: none;
+      margin: 0;
+      padding: 0;
+      border: 0;
+      background: var(--bg);
+      cursor: zoom-out;
+    }
+
+    .viewer::backdrop { background: var(--bg); }
+
+    .viewer img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+
+    .viewer-close {
+      position: fixed;
+      top: 1rem;
+      right: 1rem;
     }
 
     .option input {
@@ -83,7 +136,7 @@
       flex: none;
       width: 1.15rem;
       height: 1.15rem;
-      margin: 0.4rem 0 0;
+      margin: 0;
       border: 1.5px solid var(--soft);
       border-radius: 50%;
       cursor: pointer;
@@ -210,26 +263,25 @@
 
           <label class="option">
             <input type="radio" name="choice" value="pendant">
+            <button type="button" class="photo" data-full="images/large/pendant.webp" aria-label="see the pendant photo full screen"><img src="images/pendant.webp" width="320" height="320" alt="a silver ring pendant stamped still playful, on a chain" loading="lazy"></button>
             <span><span class="option-name">a pendant</span><span class="option-line">small, and close to your heart</span></span>
           </label>
 
           <label class="option">
             <input type="radio" name="choice" value="cap">
+            <button type="button" class="photo" data-full="images/large/cap.webp" aria-label="see the cap photo full screen"><img src="images/cap.webp" width="320" height="320" alt="a bright blue cap embroidered with still playful in white" loading="lazy"></button>
             <span><span class="option-name">a cap</span><span class="option-line">for your head, and for bad hair days</span></span>
           </label>
 
           <label class="option">
-            <input type="radio" name="choice" value="tote">
-            <span><span class="option-name">a tote bag</span><span class="option-line">goes wherever your stuff goes</span></span>
-          </label>
-
-          <label class="option">
             <input type="radio" name="choice" value="socks">
+            <button type="button" class="photo" data-full="images/large/socks.webp" aria-label="see the socks photo full screen"><img src="images/socks.webp" width="320" height="320" alt="white socks, one embroidered still and the other playful" loading="lazy"></button>
             <span><span class="option-name">socks</span><span class="option-line">hiding in your shoes, just for you</span></span>
           </label>
 
           <label class="option">
             <input type="radio" name="choice" value="bracelet">
+            <button type="button" class="photo" data-full="images/large/bracelet.webp" aria-label="see the bracelet photo full screen"><img src="images/bracelet.webp" width="320" height="320" alt="a silver chain bracelet with a lightning bolt charm stamped still playful" loading="lazy"></button>
             <span><span class="option-name">a bracelet</span><span class="option-line">on your wrist, where you’ll keep seeing it</span></span>
           </label>
         </fieldset>
@@ -252,6 +304,11 @@
       <p>still playful, coming soon.</p>
     </section>
   </main>
+
+  <dialog class="viewer" id="viewer" aria-label="photo">
+    <img id="viewer-img" alt="">
+    <button type="button" class="viewer-close" id="viewer-close">close</button>
+  </dialog>
 
   <script>
     // votes go to the stillplayful_votes table in the akabare-panipuri supabase project (see supabase.sql).
@@ -311,6 +368,23 @@
       if (res.status === 409) return "duplicate";
       throw new Error(`vote failed: ${res.status}`);
     }
+
+    const viewer = document.getElementById("viewer");
+    const viewerImg = document.getElementById("viewer-img");
+
+    // the photo sits inside the option's label, so tapping it opens the photo instead of picking the option.
+    form.querySelectorAll(".photo").forEach((button) => {
+      button.addEventListener("click", () => {
+        const thumb = button.querySelector("img");
+        viewerImg.src = button.dataset.full;
+        viewerImg.alt = thumb.alt;
+        viewer.showModal();
+      });
+    });
+
+    // tap anywhere, or press escape, to close.
+    viewer.addEventListener("click", () => viewer.close());
+    viewer.addEventListener("close", () => viewerImg.removeAttribute("src"));
 
     if (hasVoted()) showThanks();
 

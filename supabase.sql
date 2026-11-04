@@ -19,10 +19,14 @@ create policy "anyone can vote"
 -- tally, for you (run in the sql editor):
 -- select choice, count(*) from public.stillplayful_votes group by choice order by count(*) desc;
 
--- email notification (migration: stillplayful_vote_email_trigger).
--- after each vote, posts the vote and running totals to the google apps script in notify/vote-email.gs,
--- which emails yashantgyawali@gmail.com. the url and shared secret live in private.stillplayful_settings,
--- a schema the public api can't reach. pg_net is async, so a failed email never blocks a vote.
+-- email notification.
+-- after each vote, a trigger posts the vote and running totals to formsubmit.co, which emails them on.
+-- the formsubmit url (it contains the destination email) lives in private.stillplayful_settings,
+-- a schema the public api can't reach, so it stays out of this public repo.
+-- pg_net is async, so a slow or failed email never blocks a vote.
+-- applied as migrations: stillplayful_vote_email_trigger, stillplayful_vote_email_formsubmit,
+-- stillplayful_vote_email_timeout_domain, stillplayful_vote_email_drop_tote. to point it somewhere else:
+--   update private.stillplayful_settings set notify_url = '<url>' where id = 1;
 
 create extension if not exists pg_net with schema extensions;
 
@@ -31,8 +35,7 @@ revoke all on schema private from public, anon, authenticated;
 
 create table if not exists private.stillplayful_settings (
   id int primary key default 1 check (id = 1),
-  notify_url text not null,
-  secret text not null
+  notify_url text not null
 );
 
 create or replace function private.notify_stillplayful_vote()
@@ -43,20 +46,36 @@ set search_path = ''
 as $$
 declare
   s private.stillplayful_settings;
-  totals jsonb;
+  names constant jsonb := '{"pendant": "a pendant", "cap": "a cap", "tote": "a tote bag", "socks": "socks", "bracelet": "a bracelet"}';
+  total bigint;
+  totals text;
 begin
   select * into s from private.stillplayful_settings where id = 1;
   if s.notify_url is null then
     return new;
   end if;
 
-  select coalesce(jsonb_object_agg(choice, n), '{}'::jsonb) into totals
-  from (select choice, count(*) as n from public.stillplayful_votes group by choice) t;
+  select count(*) into total from public.stillplayful_votes;
 
+  select string_agg(o.name || ': ' || coalesce(v.n, 0), E'\n' order by coalesce(v.n, 0) desc, o.ord)
+  into totals
+  from (values ('pendant', 'a pendant', 1), ('cap', 'a cap', 2), ('socks', 'socks', 4), ('bracelet', 'a bracelet', 5)) as o(choice, name, ord)
+  left join (select choice, count(*) as n from public.stillplayful_votes group by choice) v using (choice);
+
+  -- jsonb sorts keys by length, so the email lists vote, email, totals in that order.
+  -- formsubmit is slow to answer, so allow 30s instead of pg_net's 5s default.
   perform net.http_post(
     url := s.notify_url,
-    body := jsonb_build_object('secret', s.secret, 'email', new.email, 'choice', new.choice, 'totals', totals),
-    headers := '{"Content-Type": "application/json"}'::jsonb
+    body := jsonb_build_object(
+      '_subject', 'still playful: a vote for ' || (names ->> new.choice),
+      '_template', 'box',
+      '_captcha', 'false',
+      'vote', names ->> new.choice,
+      'email', new.email,
+      'totals', total || ' votes so far' || E'\n' || totals
+    ),
+    headers := '{"Content-Type": "application/json", "Accept": "application/json", "Referer": "https://stillplayful.com/", "Origin": "https://stillplayful.com"}'::jsonb,
+    timeout_milliseconds := 30000
   );
 
   return new;
