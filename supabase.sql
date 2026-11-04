@@ -3,7 +3,7 @@
 
 create table if not exists public.stillplayful_votes (
   id bigint generated always as identity primary key,
-  choice text not null check (choice in ('pendant', 'cap', 'tote', 'socks', 'bracelet')),
+  choice text not null constraint stillplayful_votes_choice_check check (choice in ('pendant', 'cap', 'socks', 'bracelet')),
   email text not null unique check (email = lower(email) and char_length(email) <= 254),
   created_at timestamptz not null default now()
 );
