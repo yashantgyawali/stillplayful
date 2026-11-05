@@ -157,16 +157,41 @@
 
     .option:hover .option-name { text-decoration: underline; text-underline-offset: 3px; }
 
-    label.field {
-      display: block;
-      margin-bottom: 0.9rem;
-    }
+    label.field { display: block; }
 
     .hint {
       display: block;
       color: var(--soft);
       font-size: 1.125rem;
+      margin: 0 0 0.9rem;
     }
+
+    /* the riddle hint only shows while the semicolon is hovered, or tapped on a phone */
+    .secret-key { cursor: text; outline: none; }
+
+    /* a smiley that winks every few seconds; the two faces are stacked and swap */
+    .face { position: relative; display: inline-block; animation: face-pop 3s infinite; }
+    .face-wink { position: absolute; inset: 0; opacity: 0; }
+    .face-open { animation: face-open 3s infinite; }
+    .face-wink { animation: face-wink 3s infinite; }
+
+    /* every 3 seconds the face tilts, grows and winks for most of a second */
+    @keyframes face-pop {
+      0%, 60%, 100% { transform: none; }
+      68% { transform: scale(1.45) rotate(-14deg); }
+      76% { transform: scale(1.35) rotate(10deg); }
+      84% { transform: scale(1.4) rotate(-8deg); }
+      92% { transform: none; }
+    }
+    @keyframes face-open { 0%, 64%, 90%, 100% { opacity: 1; } 65%, 89% { opacity: 0; } }
+    @keyframes face-wink { 0%, 64%, 90%, 100% { opacity: 0; } 65%, 89% { opacity: 1; } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .face, .face-open, .face-wink { animation: none; }
+    }
+    .secret-hint { display: none; }
+    .secret:hover .secret-hint,
+    .secret-key:focus + .secret-hint { display: inline; }
 
     .row {
       display: flex;
@@ -174,7 +199,7 @@
       gap: 0.6rem;
     }
 
-    input[type="email"] {
+    #email {
       flex: 0 1 15rem;
       min-width: 0;
       font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -186,9 +211,9 @@
       background: var(--bg);
     }
 
-    input[type="email"]::placeholder { color: #aaaaaa; }
+    #email::placeholder { color: #aaaaaa; }
 
-    input[type="email"]:focus {
+    #email:focus {
       outline: none;
       border-color: var(--soft);
     }
@@ -224,12 +249,14 @@
     .thanks { margin-top: 3.5rem; }
     .thanks p:first-child { color: var(--ink); font-weight: 400; font-size: 1.75rem; letter-spacing: 0; }
 
+    .prize { text-transform: none; white-space: pre-line; }
+
     @media (max-width: 600px) {
       body { font-size: 1.25rem; }
       main { padding: 2.5rem 1.25rem 4rem; }
       h1 { font-size: 2.5rem; }
       p { margin-bottom: 1.6rem; }
-      input[type="email"] { flex: 1 1 100%; }
+      #email { flex: 1 1 100%; }
     }
 
     [hidden] { display: none !important; }
@@ -288,15 +315,17 @@
 
         <label class="field" for="email">
           where can i find you if yours wins?
-          <span class="hint">one vote per email. i’ll only write if yours wins.</span>
         </label>
+        <p class="hint">one vote per email. i only accept emails and winners <span class="secret"><span class="secret-key" tabindex="0"><span class="face" aria-hidden="true"><span class="face-open">🙂</span><span class="face-wink">😉</span></span></span><span class="secret-hint"> came from instagram? i take more than just emails. feed me 8 digits please.</span></span></p>
         <div class="row">
-          <input type="email" id="email" name="email" autocomplete="email" inputmode="email" placeholder="you@example.com" required>
+          <input type="text" id="email" name="email" autocomplete="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com">
           <button type="submit" id="submit" disabled>count my vote</button>
         </div>
         <p class="error" id="error" role="alert"></p>
       </form>
     </section>
+
+    <section class="thanks prize" id="prize" hidden aria-live="polite"></section>
 
     <section class="thanks" id="thanks" hidden aria-live="polite">
       <p>got it. thank you.</p>
@@ -316,22 +345,13 @@
     const SUPABASE_URL = "https://ibayovdptlrvoepwrqpz.supabase.co";
     const SUPABASE_ANON_KEY = "sb_publishable_7qavsdJQiSaBjFN76KFJOw_fKUoRXjj";
 
-    const STORAGE_KEY = "stillplayful-voted";
-
     const form = document.getElementById("vote-form");
     const submit = document.getElementById("submit");
     const email = document.getElementById("email");
     const error = document.getElementById("error");
     const voteSection = document.getElementById("vote");
     const thanks = document.getElementById("thanks");
-
-    function hasVoted() {
-      try { return localStorage.getItem(STORAGE_KEY) !== null; } catch { return false; }
-    }
-
-    function markVoted(choice) {
-      try { localStorage.setItem(STORAGE_KEY, choice); } catch {}
-    }
+    const prize = document.getElementById("prize");
 
     function showThanks() {
       voteSection.hidden = true;
@@ -347,8 +367,49 @@
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
     }
 
+    function looksLikeCode(value) {
+      return /^[\d\s-]+$/.test(value.trim()) && /\d/.test(value);
+    }
+
     function updateButton() {
-      submit.disabled = !(selectedChoice() && validEmail(email.value));
+      submit.disabled = !((selectedChoice() && validEmail(email.value)) || looksLikeCode(email.value));
+    }
+
+    // the answer and the prize text live only on the server; the page just asks.
+    async function checkCode(code) {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/check_stillplayful_riddle`, {
+        method: "POST",
+        headers: { "apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ answer: code })
+      });
+      if (!res.ok) throw new Error(`check failed: ${res.status}`);
+      return res.json();
+    }
+
+    function showPrize(text) {
+      const [first, ...rest] = text.split("\n");
+      prize.replaceChildren(...[first, rest.join("\n")].filter(Boolean).map((line) => {
+        const p = document.createElement("p");
+        p.textContent = line;
+        return p;
+      }));
+      voteSection.hidden = true;
+      prize.hidden = false;
+      prize.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+
+    async function submitCode() {
+      submit.disabled = true;
+      try {
+        const result = await checkCode(email.value);
+        if (result.ok) return showPrize(result.prize);
+        error.textContent = result.slow_down
+          ? "easy there. give it a minute and try again."
+          : "that’s not it. try again?";
+      } catch (e) {
+        error.textContent = "something went wrong on my end. try again in a moment?";
+      }
+      updateButton();
     }
 
     async function sendVote(choice, address) {
@@ -386,14 +447,14 @@
     viewer.addEventListener("click", () => viewer.close());
     viewer.addEventListener("close", () => viewerImg.removeAttribute("src"));
 
-    if (hasVoted()) showThanks();
-
     form.addEventListener("change", updateButton);
     email.addEventListener("input", updateButton);
 
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       error.textContent = "";
+
+      if (looksLikeCode(email.value)) return submitCode();
 
       const choice = selectedChoice();
       if (!choice || !validEmail(email.value)) return;
@@ -408,7 +469,6 @@
           submit.textContent = "count my vote";
           return;
         }
-        markVoted(choice);
         showThanks();
       } catch (e) {
         error.textContent = "something went wrong on my end. try again in a moment?";

@@ -88,3 +88,85 @@ drop trigger if exists stillplayful_vote_email on public.stillplayful_votes;
 create trigger stillplayful_vote_email
   after insert on public.stillplayful_votes
   for each row execute function private.notify_stillplayful_vote();
+
+-- instagram riddle (migrations: stillplayful_riddle_check, stillplayful_riddle_check_cleanup).
+-- the email box on the page doubles as a code box. the page only sends the guess to
+-- public.check_stillplayful_riddle; the answer (bcrypt hash only) and the prize text live in the
+-- private schema, so neither appears in the page source or the public api. guesses are limited to
+-- 5 a minute and 30 an hour per ip (cloudflare's cf-connecting-ip, which callers can't fake), plus a
+-- global cap of 60 wrong guesses a minute so a botnet of many ips still can't out-guess the code.
+-- the answer is deliberately not written here. to change the answer or the prize:
+--   update private.stillplayful_riddle
+--   set answer_hash = extensions.crypt('<new answer>', extensions.gen_salt('bf', 10)), prize = '<text>'
+--   where id = 1;
+
+create table if not exists private.stillplayful_riddle (
+  id int primary key default 1 check (id = 1),
+  answer_hash text not null,
+  prize text not null
+);
+
+create table if not exists private.stillplayful_riddle_attempts (
+  id bigint generated always as identity primary key,
+  ip text not null,
+  correct boolean not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists stillplayful_riddle_attempts_ip_time
+  on private.stillplayful_riddle_attempts (ip, created_at);
+
+create or replace function public.check_stillplayful_riddle(answer text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  headers jsonb := coalesce(nullif(current_setting('request.headers', true), '')::jsonb, '{}'::jsonb);
+  caller_ip text := coalesce(
+    headers ->> 'cf-connecting-ip',
+    nullif(split_part(headers ->> 'x-forwarded-for', ',', 1), ''),
+    'unknown'
+  );
+  guess text := regexp_replace(coalesce(answer, ''), '\D', '', 'g');
+  last_minute int;
+  last_hour int;
+  global_minute int;
+  r private.stillplayful_riddle;
+  is_correct boolean;
+begin
+  -- per ip: 5 guesses a minute, 30 an hour, so scripting through 100 million codes is out of reach.
+  select count(*) filter (where created_at > now() - interval '1 minute'), count(*)
+  into last_minute, last_hour
+  from private.stillplayful_riddle_attempts
+  where ip = caller_ip and created_at > now() - interval '1 hour';
+
+  -- global: at most 60 wrong guesses a minute from everyone, so a botnet of many ips still can't
+  -- out-guess an 8-digit code. correct guesses never count toward this.
+  select count(*) into global_minute
+  from private.stillplayful_riddle_attempts
+  where correct = false and created_at > now() - interval '1 minute';
+
+  if last_minute >= 5 or last_hour >= 30 or global_minute >= 60 then
+    return jsonb_build_object('ok', false, 'slow_down', true);
+  end if;
+
+  if length(guess) = 0 or length(guess) > 32 then
+    return jsonb_build_object('ok', false);
+  end if;
+
+  select * into r from private.stillplayful_riddle where id = 1;
+  is_correct := r.answer_hash = extensions.crypt(guess, r.answer_hash);
+
+  insert into private.stillplayful_riddle_attempts (ip, correct) values (caller_ip, is_correct);
+
+  if is_correct then
+    return jsonb_build_object('ok', true, 'prize', r.prize);
+  end if;
+  return jsonb_build_object('ok', false);
+end;
+$$;
+
+revoke all on function public.check_stillplayful_riddle(text) from public, authenticated;
+grant execute on function public.check_stillplayful_riddle(text) to anon;
